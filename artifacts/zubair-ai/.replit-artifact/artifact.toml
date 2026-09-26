@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Zubair AI"
+description = "A mobile-first personal AI assistant for coding and app development, with Urdu, Roman Urdu, Coding Assistant, and App Idea Generator modes."
+version = "1.0.0"
+id = "artifacts/zubair-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21025
+
+[services.development]
+run = "pnpm --filter @workspace/zubair-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/zubair-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/zubair-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21025"
+BASE_PATH = "/"
