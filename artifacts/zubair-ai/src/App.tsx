@@ -39,6 +39,15 @@ const queryClient = new QueryClient();
 type Mode = 'coding' | 'ideas';
 type Language = 'english' | 'urdu' | 'roman';
 type Message = { id: number; role: 'assistant' | 'user'; text: string; time: string };
+type Project = {
+  id: number;
+  title: string;
+  idea: string;
+  progress: string;
+  status: 'active' | 'paused' | 'complete';
+  createdAt: string;
+  updatedAt: string;
+};
 
 const modes: { id: Mode; label: string; description: string; icon: typeof Code2 }[] = [
   { id: 'coding', label: 'Coding Assistant', description: 'Build, fix, explain', icon: Code2 },
@@ -57,21 +66,6 @@ const initialMessage: Message = {
   text: "Assalam-o-alaikum, Zubair. I’m ready to turn a rough thought into a working build. Ask me to code, debug, explain, or shape your next app idea.",
 };
 
-const assistantReplies: Record<Language, Record<Mode, string>> = {
-  english: {
-    coding: "Let’s make it practical. Share the code, error, or outcome you want, and I’ll break it into a small plan first, then write the next useful piece.",
-    ideas: "Here’s a direction worth exploring: a focused app that solves one daily friction for people around you. Tell me who it is for and I’ll turn the spark into a clear MVP, screen by screen.",
-  },
-  urdu: {
-    coding: "آئیے اسے عملی بناتے ہیں۔ اپنا کوڈ، ایرر یا مطلوبہ نتیجہ بھیجیں۔ میں پہلے ایک سادہ منصوبہ بناؤں گا، پھر اگلا مفید حصہ لکھوں گا۔",
-    ideas: "ایک اچھا خیال یہ ہو سکتا ہے: ایسا چھوٹا ایپ جو آپ کے آس پاس کے لوگوں کی روزمرہ مشکل آسان کرے۔ بتائیں یہ کس کے لیے ہے، میں اسے ایک واضح MVP میں بدل دوں گا۔",
-  },
-  roman: {
-    coding: "Chaliye isay practical banate hain. Apna code, error ya desired result bhejein. Main pehle chhota plan banaunga, phir agla useful hissa likhunga.",
-    ideas: "Ek acha rukh yeh ho sakta hai: aisi focused app jo aap ke aas paas ke logon ki roz ki ek mushkil asaan kare. Batayein kis ke liye hai, main isay clear MVP mein badal dunga.",
-  },
-};
-
 function getTime() {
   return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date());
 }
@@ -84,10 +78,13 @@ function Home() {
   const [isTyping, setIsTyping] = useState(false);
   const [notice, setNotice] = useState('');
   const [mobilePanel, setMobilePanel] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageId = useRef(2);
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode) ?? modes[0], [mode]);
+  const activeProject = useMemo(() => projects.find((project) => project.id === activeProjectId), [projects, activeProjectId]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -100,23 +97,60 @@ function Home() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
-  const sendMessage = (value: string) => {
+  useEffect(() => {
+    void fetch('/api/assistant/projects')
+      .then((response) => (response.ok ? response.json() : []))
+      .then((data: Project[]) => setProjects(Array.isArray(data) ? data : []))
+      .catch(() => setNotice('Project memory is unavailable'));
+  }, []);
+
+  const upsertProject = (project: Project) => {
+    setProjects((current) => {
+      const exists = current.some((item) => item.id === project.id);
+      return exists ? current.map((item) => item.id === project.id ? project : item) : [project, ...current];
+    });
+    setActiveProjectId(project.id);
+  };
+
+  const sendMessage = async (value: string) => {
     const clean = value.trim();
     if (!clean || isTyping) return;
     const userMessage: Message = { id: messageId.current++, role: 'user', text: clean, time: getTime() };
     setMessages((current) => [...current, userMessage]);
     setDraft('');
     setIsTyping(true);
-    window.setTimeout(() => {
-      const reply = assistantReplies[language][mode];
-      setMessages((current) => [...current, { id: messageId.current++, role: 'assistant', text: reply, time: getTime() }]);
+    try {
+      const response = await fetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: clean,
+          mode,
+          language,
+          projectId: activeProjectId,
+          history: [...messages, userMessage].slice(-16).map((item) => ({ role: item.role, content: item.text })),
+        }),
+      });
+      const data = await response.json() as { reply?: string; project?: Project | null; error?: string };
+      if (!response.ok || !data.reply) throw new Error(data.error ?? 'The assistant could not respond.');
+      setMessages((current) => [...current, { id: messageId.current++, role: 'assistant', text: data.reply!, time: getTime() }]);
+      if (data.project) upsertProject(data.project);
+    } catch (error) {
+      setMessages((current) => [...current, {
+        id: messageId.current++,
+        role: 'assistant',
+        text: error instanceof Error ? error.message : 'I could not reach the assistant. Please try again.',
+        time: getTime(),
+      }]);
+      setNotice('Response failed');
+    } finally {
       setIsTyping(false);
-    }, 700);
+    }
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    sendMessage(draft);
+    void sendMessage(draft);
   };
 
   const resetConversation = (label: string) => {
@@ -127,6 +161,31 @@ function Home() {
   const changeLanguage = (next: Language) => {
     setLanguage(next);
     setNotice(next === 'english' ? 'English replies ready' : next === 'urdu' ? 'اردو جوابات تیار ہیں' : 'Roman Urdu replies ready');
+  };
+
+  const rememberCurrentIdea = async () => {
+    const latestUserMessage = [...messages].reverse().find((item) => item.role === 'user');
+    if (!latestUserMessage) {
+      setNotice('Send an idea first, then save it');
+      return;
+    }
+    try {
+      const response = await fetch('/api/assistant/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: latestUserMessage.text.replace(/\s+/g, ' ').slice(0, 52) || 'New app idea',
+          idea: latestUserMessage.text,
+          progress: 'Conversation saved. Define the smallest useful MVP next.',
+        }),
+      });
+      const project = await response.json() as Project & { error?: string };
+      if (!response.ok) throw new Error(project.error ?? 'Could not save project memory');
+      upsertProject(project);
+      setNotice('Saved to project memory');
+    } catch {
+      setNotice('Could not save project memory');
+    }
   };
 
   return (
@@ -158,6 +217,27 @@ function Home() {
               <span className="font-semibold">New conversation</span>
               <span className="ml-auto text-sidebar-foreground/35"><kbd className="font-mono text-[10px]">N</kbd></span>
             </button>
+          </div>
+
+          <div className="mt-7">
+            <div className="mb-3 flex items-center justify-between px-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/45">Project memory</span>
+              <button type="button" aria-label="Remember current idea" data-testid="button-save-project" onClick={() => void rememberCurrentIdea()} className="rounded-md p-1 text-sidebar-foreground/50 transition hover:bg-sidebar-accent hover:text-primary"><Plus size={14} /></button>
+            </div>
+            {projects.length === 0 ? (
+              <button type="button" onClick={() => setMode('ideas')} className="w-full rounded-xl border border-dashed border-sidebar-border px-3 py-3 text-left text-[11px] leading-5 text-sidebar-foreground/50 transition hover:border-primary/50 hover:text-sidebar-foreground/75">
+                Your saved app ideas will live here.
+              </button>
+            ) : (
+              <div className="space-y-1.5">
+                {projects.slice(0, 3).map((project) => (
+                  <button type="button" key={project.id} onClick={() => { setActiveProjectId(project.id); setNotice(`${project.title} selected`); }} className={`w-full rounded-xl px-3 py-2.5 text-left transition ${activeProjectId === project.id ? 'bg-primary/15 text-sidebar-foreground' : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground'}`}>
+                    <div className="truncate text-[11px] font-semibold">{project.title}</div>
+                    <div className="mt-1 truncate font-mono text-[9px] uppercase tracking-wider text-sidebar-foreground/40">{project.status} · memory saved</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mt-auto">
@@ -230,7 +310,7 @@ function Home() {
                       <button type="submit" disabled={!draft.trim() || isTyping} data-testid="button-send" className="group flex items-center gap-2 rounded-xl bg-primary px-3.5 py-2 text-xs font-extrabold text-primary-foreground transition hover:-translate-y-0.5 hover:shadow-[0_6px_15px_hsl(var(--primary)/.27)] disabled:cursor-not-allowed disabled:opacity-45"><span>Send</span><ArrowUp size={15} className="transition-transform group-hover:-translate-y-0.5" /></button>
                     </div>
                   </form>
-                  <div className="mt-3 flex items-center justify-center gap-1.5 text-center font-mono text-[9px] uppercase tracking-[0.13em] text-muted-foreground/60"><Sparkles size={11} /> Local demo responses · No API keys needed</div>
+                  <div className="mt-3 flex items-center justify-center gap-1.5 text-center font-mono text-[9px] uppercase tracking-[0.13em] text-muted-foreground/60"><Sparkles size={11} /> Secure AI responses · Project memory enabled</div>
                 </div>
               </div>
             </section>
@@ -245,6 +325,17 @@ function Home() {
               <div className="grid grid-cols-3 gap-1 rounded-xl border border-border bg-card p-1">
                 {(['english', 'urdu', 'roman'] as Language[]).map((item) => <button type="button" key={item} data-testid={`button-side-language-${item}`} onClick={() => changeLanguage(item)} className={`rounded-lg px-1 py-2 text-[10px] font-bold transition ${language === item ? 'bg-sidebar text-sidebar-foreground' : 'text-muted-foreground hover:bg-muted'}`}>{item === 'english' ? 'English' : item === 'urdu' ? 'اردو' : 'Roman'}</button>)}
               </div>
+               <div className="my-8 h-px bg-border" />
+               <div className="mb-3 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Project memory</span><button type="button" aria-label="Save current idea" data-testid="button-side-save-project" onClick={() => void rememberCurrentIdea()} className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-primary"><Plus size={14} /></button></div>
+               {activeProject ? (
+                 <div className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+                   <div className="flex items-center gap-2"><FolderKanban size={14} className="text-primary" /><span className="truncate text-xs font-bold">{activeProject.title}</span></div>
+                   <p className="mt-3 line-clamp-4 text-[11px] leading-5 text-muted-foreground">{activeProject.idea || 'No idea captured yet.'}</p>
+                   <p className="mt-3 border-t border-border pt-3 text-[10px] leading-4 text-muted-foreground"><span className="font-semibold text-foreground">Latest:</span> {activeProject.progress || 'No progress captured yet.'}</p>
+                 </div>
+               ) : (
+                 <p className="rounded-2xl border border-dashed border-border p-4 text-[11px] leading-5 text-muted-foreground">Ask for an app idea or save a conversation to start remembering your project.</p>
+               )}
               <div className="mt-8 rounded-2xl border border-accent/25 bg-accent/10 p-4"><div className="flex items-center gap-2 text-accent"><Lightbulb size={15} /><span className="font-mono text-[10px] uppercase tracking-wider">Small promise</span></div><p className="mt-2 text-[12px] leading-5 text-foreground/70">Start with a messy thought. Leave with the next clear step.</p></div>
             </aside>
           </div>
