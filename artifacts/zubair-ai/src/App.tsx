@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -360,9 +362,44 @@ function MessageBubble({ message, onCopy }: { message: Message; onCopy: () => vo
       <div className={`grid size-8 shrink-0 place-items-center rounded-xl ${isAssistant ? 'bg-sidebar text-primary' : 'bg-accent text-accent-foreground'}`}>{isAssistant ? <Bot size={16} /> : <span className="text-xs font-extrabold">Z</span>}</div>
       <div className={`group max-w-[min(88%,620px)] ${isAssistant ? '' : 'items-end'}`}>
         <div className={`flex items-center gap-2 px-1 pb-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground ${isAssistant ? '' : 'justify-end'}`}><span>{isAssistant ? 'Zubair AI' : 'You'}</span><span className="text-muted-foreground/50">{message.time}</span></div>
-        <div data-testid={`message-${message.role}-${message.id}`} className={`rounded-2xl px-4 py-3.5 text-[13px] leading-6 ${isAssistant ? 'rounded-tl-md border border-border bg-card text-foreground shadow-[0_6px_20px_hsl(var(--foreground)/.035)]' : 'rounded-tr-md bg-sidebar text-sidebar-foreground'}`}>{message.text}</div>
+        <div
+          data-testid={`message-${message.role}-${message.id}`}
+          dir="auto"
+          className={`rounded-2xl px-4 py-3.5 text-[13px] leading-6 ${isAssistant ? 'rounded-tl-md border border-border bg-card text-foreground shadow-[0_6px_20px_hsl(var(--foreground)/.035)]' : 'rounded-tr-md bg-sidebar text-sidebar-foreground'}`}
+        >
+          <MarkdownMessage content={message.text} />
+        </div>
         {isAssistant && <button type="button" aria-label="Copy assistant message" data-testid={`button-copy-message-${message.id}`} onClick={copyMessage} className="mt-1.5 flex items-center gap-1 px-1 text-[10px] text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground">{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}</button>}
       </div>
+    </div>
+  );
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="chat-markdown" dir="auto">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: ({ node, className, children, ...props }) => (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          ),
+          pre: ({ node, children, ...props }) => (
+            <pre {...props} className="chat-markdown-pre">
+              {children}
+            </pre>
+          ),
+          a: ({ node, children, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

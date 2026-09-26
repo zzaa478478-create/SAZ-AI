@@ -360,6 +360,103 @@
   scrollbar-color: hsl(var(--border)) transparent;
 }
 
+.chat-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0 0 0.75rem;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3 {
+  margin: 1rem 0 0.5rem;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.chat-markdown h1 { font-size: 1.2rem; }
+.chat-markdown h2 { font-size: 1.08rem; }
+.chat-markdown h3 { font-size: 1rem; }
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0 0 0.75rem;
+  padding-inline-start: 1.35rem;
+}
+
+.chat-markdown ul { list-style: disc; }
+.chat-markdown ol { list-style: decimal; }
+
+.chat-markdown li {
+  margin: 0.25rem 0;
+  padding-inline-start: 0.15rem;
+}
+
+.chat-markdown blockquote {
+  margin: 0.75rem 0;
+  border-inline-start: 3px solid hsl(var(--accent));
+  padding-inline-start: 0.85rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.chat-markdown a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown code {
+  border-radius: 0.35rem;
+  background: hsl(var(--muted));
+  padding: 0.12rem 0.35rem;
+  font-family: var(--app-font-mono);
+  font-size: 0.88em;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.chat-markdown-pre {
+  margin: 0.85rem 0;
+  overflow-x: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: hsl(var(--sidebar));
+  padding: 0.85rem 1rem;
+  text-align: left;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.chat-markdown-pre code {
+  display: block;
+  overflow-wrap: normal;
+  background: transparent;
+  padding: 0;
+  color: hsl(var(--sidebar-foreground));
+  font-size: 0.82rem;
+  line-height: 1.65;
+  white-space: pre;
+}
+
+.chat-markdown hr {
+  margin: 1rem 0;
+  border: 0;
+  border-top: 1px solid hsl(var(--border));
+}
+
 /**
  * Using the elevate system.
  * Automatic contrast adjustment.
