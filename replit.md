@@ -1,20 +1,23 @@
-# [Project name]
+# Zubair AI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Zubair AI is a mobile-first personal coding and app-development assistant with Urdu, Roman Urdu, English, and persistent project memory.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the API server
+- `pnpm --filter @workspace/zubair-ai run dev` — run the web app
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Required secrets: `OPENAI_API_KEY` or `GEMINI_API_KEY` for server-side AI responses
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
+- AI: OpenAI SDK or Gemini REST API, selected by configured secret
+- Project memory: SQLite via better-sqlite3 in `artifacts/api-server/data/zubair-ai.sqlite`
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
@@ -22,15 +25,23 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- Web chat UI: `artifacts/zubair-ai/src/App.tsx`
+- API routes: `artifacts/api-server/src/routes/assistant.ts`
+- SQLite project memory: `artifacts/api-server/src/lib/project-memory.ts`
+- Shared theme: `artifacts/zubair-ai/src/index.css`
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- AI credentials stay server-side; the browser only calls `/api/assistant/chat`.
+- Gemini is preferred when `GEMINI_API_KEY` exists; OpenAI is the fallback when `OPENAI_API_KEY` is valid.
+- Project memory is deliberately single-user and local SQLite for a beginner-friendly first version.
+- Idea-mode chats automatically create project memory; coding chats update the selected project's latest progress.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Real AI coding and app-idea responses in English, Urdu, and Roman Urdu.
+- Coding Assistant and App Idea Generator modes.
+- Persistent project list with idea, status, and latest progress.
 
 ## User preferences
 
@@ -38,7 +49,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Gemini model availability can change; the current direct API path uses `gemini-3.8-flash` for new users.
+- Add AI credentials through Replit Secrets, never in frontend code or checked-in files.
 
 ## Pointers
 

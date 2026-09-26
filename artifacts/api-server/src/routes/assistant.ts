@@ -10,7 +10,9 @@ import {
 } from "../lib/project-memory";
 
 const router: IRouter = Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : undefined;
 
 type ChatRole = "user" | "assistant";
 type ChatMode = "coding" | "ideas";
@@ -74,6 +76,56 @@ ${languageInstruction}
 ${modeInstruction}
 ${memoryInstruction}
 Be direct, encouraging, and specific. Never claim you ran code, accessed files, or changed a project when you did not. Use Markdown and fenced code blocks for code.`;
+}
+
+async function generateWithGemini(
+  system: string,
+  history: ChatMessage[],
+  message: string,
+) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return undefined;
+
+  let lastError = "Gemini request failed.";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents: [
+            ...history.map((item) => ({
+              role: item.role === "assistant" ? "model" : "user",
+              parts: [{ text: item.content }],
+            })),
+            { role: "user", parts: [{ text: message }] },
+          ],
+          generationConfig: { maxOutputTokens: 8192 },
+        }),
+      },
+    );
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      error?: { message?: string };
+    };
+    if (response.ok) {
+      return data.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text ?? "")
+        .join("")
+        .trim();
+    }
+
+    lastError = data.error?.message ?? "Gemini request failed.";
+    const transient = response.status === 429 || response.status >= 500 || lastError.toLowerCase().includes("high demand");
+    if (!transient || attempt === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+  throw new Error(lastError);
 }
 
 router.get("/assistant/projects", (_req, res) => {
@@ -144,8 +196,8 @@ router.post("/assistant/chat", async (req, res) => {
     res.status(400).json({ error: "Message cannot be empty." });
     return;
   }
-  if (!process.env.OPENAI_API_KEY) {
-    res.status(503).json({ error: "OpenAI is not configured on the server yet." });
+  if (!process.env.GEMINI_API_KEY && !openai) {
+    res.status(503).json({ error: "No AI provider is configured on the server yet." });
     return;
   }
 
@@ -166,16 +218,20 @@ router.post("/assistant/chat", async (req, res) => {
     .filter((item) => item.content.length > 0);
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL ?? "gpt-5.6-terra",
-      max_completion_tokens: 8192,
-      messages: [
-        { role: "system", content: systemPrompt(mode, language, project) },
-        ...history,
-        { role: "user", content: message },
-      ],
-    });
-    const reply = completion.choices[0]?.message?.content?.trim();
+    const system = systemPrompt(mode, language, project);
+    const reply = process.env.GEMINI_API_KEY
+      ? await generateWithGemini(system, history, message)
+      : (
+        await openai!.chat.completions.create({
+          model: process.env.OPENAI_MODEL ?? "gpt-5.6-terra",
+          max_completion_tokens: 8192,
+          messages: [
+            { role: "system", content: system },
+            ...history,
+            { role: "user", content: message },
+          ],
+        })
+      ).choices[0]?.message?.content?.trim();
     if (!reply) {
       res.status(502).json({ error: "The AI returned an empty response." });
       return;

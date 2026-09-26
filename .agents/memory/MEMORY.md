@@ -1,0 +1,1 @@
+- [Gemini model availability](gemini-model-availability.md) — direct Gemini API model names may change for new users; keep the configured model aligned with provider errors.
