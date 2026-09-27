@@ -2,10 +2,19 @@ import { Router, type IRouter } from "express";
 import OpenAI from "openai";
 import {
   createProject,
+  createConversation,
+  createKnowledgeDocument,
+  addConversationMessage,
   deleteProject,
+  deleteKnowledgeDocument,
   getProject,
+  getConversation,
+  listConversationMessages,
+  listConversations,
+  listKnowledgeDocuments,
   listProjects,
   updateProject,
+  type KnowledgeDocument,
   type ProjectStatus,
 } from "../lib/project-memory";
 
@@ -17,6 +26,7 @@ const openai = process.env.OPENAI_API_KEY
 type ChatRole = "user" | "assistant";
 type ChatMode = "coding" | "ideas";
 type ChatLanguage = "english" | "urdu" | "roman";
+type ChatProvider = "auto" | "gemini" | "groq" | "deepseek" | "openai" | "local";
 
 type ChatMessage = {
   role: ChatRole;
@@ -39,6 +49,17 @@ function isChatLanguage(value: unknown): value is ChatLanguage {
   return value === "english" || value === "urdu" || value === "roman";
 }
 
+function isChatProvider(value: unknown): value is ChatProvider {
+  return (
+    value === "auto" ||
+    value === "gemini" ||
+    value === "groq" ||
+    value === "deepseek" ||
+    value === "openai" ||
+    value === "local"
+  );
+}
+
 function isProjectStatus(value: unknown): value is ProjectStatus {
   return value === "active" || value === "paused" || value === "complete";
 }
@@ -52,6 +73,7 @@ function systemPrompt(
   mode: ChatMode,
   language: ChatLanguage,
   project: ReturnType<typeof projectContext>,
+  documents: KnowledgeDocument[],
 ) {
   const languageInstruction = `آپ ایک ذہین اور کثیر اللسانی (Multilingual) AI اسسٹنٹ ہیں۔ آپ دنیا کی 100 سے زائد زبانیں (بشمول انگلش، عربی، فارسی، ہسپانوی، فرانسیسی وغیرہ) اور پاکستان کی تمام علاقائی زبانیں (پشتو، سندھی، پنجابی، بلوچی) آسانی سے سمجھ اور بول سکتے ہیں۔
 آپ کا بنیادی اصول:
@@ -73,11 +95,23 @@ Idea: ${project.idea || "Not captured yet"}
 Latest progress: ${project.progress || "No progress captured yet"}
 Use this memory to keep continuity. Do not invent progress that is not present.`
     : "There is no active project memory yet. If the user describes a project idea, make the next step concrete.";
+  const knowledgeInstruction = documents.length
+    ? `Custom project knowledge:
+${documents
+  .map(
+    (document) =>
+      `--- ${document.name} (${document.mimeType}) ---
+${document.content.slice(0, 12000)}`,
+  )
+  .join("\n")}
+Use this material as project context. Do not claim it is authoritative if it conflicts with the user's latest message.`
+    : "There are no uploaded project documents yet.";
 
   return `You are SAZ AI, a personal assistant for coding and app development.
 ${languageInstruction}
 ${modeInstruction}
 ${memoryInstruction}
+${knowledgeInstruction}
 Be direct, encouraging, and specific. Never claim you ran code, accessed files, or changed a project when you did not. Use Markdown and fenced code blocks for code.`;
 }
 
@@ -131,8 +165,163 @@ async function generateWithGemini(
   throw new Error(lastError);
 }
 
+async function generateWithOpenAICompatible(
+  apiKey: string,
+  baseURL: string | undefined,
+  model: string,
+  system: string,
+  history: ChatMessage[],
+  message: string,
+) {
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const completion = await client.chat.completions.create({
+    model,
+    max_tokens: 8192,
+    messages: [
+      { role: "system", content: system },
+      ...history,
+      { role: "user", content: message },
+    ],
+  });
+  return completion.choices[0]?.message?.content?.trim();
+}
+
+function providerIsConfigured(provider: ChatProvider, localEndpoint?: string) {
+  if (provider === "gemini") return Boolean(process.env.GEMINI_API_KEY);
+  if (provider === "groq") return Boolean(process.env.GROQ_API_KEY);
+  if (provider === "deepseek") return Boolean(process.env.DEEPSEEK_API_KEY);
+  if (provider === "openai") return Boolean(process.env.OPENAI_API_KEY);
+  if (provider === "local") return Boolean(localEndpoint);
+  return Boolean(
+    process.env.GEMINI_API_KEY ||
+      process.env.GROQ_API_KEY ||
+      process.env.DEEPSEEK_API_KEY ||
+      process.env.OPENAI_API_KEY,
+  );
+}
+
+async function generateWithProvider(
+  provider: Exclude<ChatProvider, "auto">,
+  input: {
+    system: string;
+    history: ChatMessage[];
+    message: string;
+    localEndpoint?: string;
+    localModel?: string;
+  },
+) {
+  if (provider === "gemini") {
+    return generateWithGemini(input.system, input.history, input.message);
+  }
+  if (provider === "groq") {
+    return generateWithOpenAICompatible(
+      process.env.GROQ_API_KEY!,
+      "https://api.groq.com/openai/v1",
+      process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+      input.system,
+      input.history,
+      input.message,
+    );
+  }
+  if (provider === "deepseek") {
+    return generateWithOpenAICompatible(
+      process.env.DEEPSEEK_API_KEY!,
+      "https://api.deepseek.com",
+      process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
+      input.system,
+      input.history,
+      input.message,
+    );
+  }
+  if (provider === "local") {
+    const endpoint = input.localEndpoint?.trim().replace(/\/$/, "");
+    if (!endpoint) return undefined;
+    return generateWithOpenAICompatible(
+      "local",
+      endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`,
+      input.localModel ?? "local-model",
+      input.system,
+      input.history,
+      input.message,
+    );
+  }
+  return generateWithOpenAICompatible(
+    process.env.OPENAI_API_KEY!,
+    undefined,
+    process.env.OPENAI_MODEL ?? "gpt-5.6-terra",
+    input.system,
+    input.history,
+    input.message,
+  );
+}
+
 router.get("/assistant/projects", (_req, res) => {
   res.json(listProjects());
+});
+
+router.get("/assistant/projects/:id/knowledge", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !getProject(id)) {
+    res.status(404).json({ error: "Project not found." });
+    return;
+  }
+  res.json(
+    listKnowledgeDocuments(id).map(({ content: _content, ...document }) => document),
+  );
+});
+
+router.post("/assistant/projects/:id/knowledge", (req, res) => {
+  const id = Number(req.params.id);
+  const body = isRecord(req.body) ? req.body : {};
+  const name = cleanText(body.name);
+  if (!Number.isInteger(id) || !getProject(id)) {
+    res.status(404).json({ error: "Project not found." });
+    return;
+  }
+  if (!name) {
+    res.status(400).json({ error: "A document name is required." });
+    return;
+  }
+  const content = cleanText(body.content);
+  if (content.length > 100_000) {
+    res.status(413).json({ error: "Document is too large. Keep uploads under 100 KB." });
+    return;
+  }
+  res.status(201).json(
+    createKnowledgeDocument({
+      projectId: id,
+      name,
+      mimeType: cleanText(body.mimeType, "text/plain"),
+      content,
+    }),
+  );
+});
+
+router.delete("/assistant/knowledge/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !deleteKnowledgeDocument(id)) {
+    res.status(404).json({ error: "Document not found." });
+    return;
+  }
+  res.status(204).send();
+});
+
+router.get("/assistant/projects/:id/conversations", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !getProject(id)) {
+    res.status(404).json({ error: "Project not found." });
+    return;
+  }
+  res.json(listConversations(id, cleanText(req.query.search)));
+});
+
+router.get("/assistant/conversations/:id/messages", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !getConversation(id)) {
+    res.status(404).json({ error: "Conversation not found." });
+    return;
+  }
+  res.json(listConversationMessages(id));
 });
 
 router.post("/assistant/projects", (req, res) => {
@@ -190,6 +379,13 @@ router.post("/assistant/chat", async (req, res) => {
   const message = cleanText(body.message);
   const mode = isChatMode(body.mode) ? body.mode : "coding";
   const language = isChatLanguage(body.language) ? body.language : "english";
+  const provider = isChatProvider(body.provider) ? body.provider : "auto";
+  const localEndpoint = cleanText(body.localEndpoint);
+  const localModel = cleanText(body.localModel, "local-model");
+  const conversationId =
+    typeof body.conversationId === "number" && Number.isInteger(body.conversationId)
+      ? body.conversationId
+      : undefined;
   const projectId =
     typeof body.projectId === "number" && Number.isInteger(body.projectId)
       ? body.projectId
@@ -199,12 +395,13 @@ router.post("/assistant/chat", async (req, res) => {
     res.status(400).json({ error: "Message cannot be empty." });
     return;
   }
-  if (!process.env.GEMINI_API_KEY && !openai) {
-    res.status(503).json({ error: "No AI provider is configured on the server yet." });
+  if (!providerIsConfigured(provider, localEndpoint)) {
+    res.status(503).json({ error: "The selected AI provider is not configured." });
     return;
   }
 
   const project = projectContext(projectId);
+  const documents = projectId ? listKnowledgeDocuments(projectId) : [];
   const rawHistory = Array.isArray(body.history) ? body.history : [];
   const history: ChatMessage[] = rawHistory
     .filter(
@@ -221,24 +418,43 @@ router.post("/assistant/chat", async (req, res) => {
     .filter((item) => item.content.length > 0);
 
   try {
-    const system = systemPrompt(mode, language, project);
-    const reply = process.env.GEMINI_API_KEY
-      ? await generateWithGemini(system, history, message)
-      : (
-        await openai!.chat.completions.create({
-          model: process.env.OPENAI_MODEL ?? "gpt-5.6-terra",
-          max_completion_tokens: 8192,
-          messages: [
-            { role: "system", content: system },
-            ...history,
-            { role: "user", content: message },
-          ],
-        })
-      ).choices[0]?.message?.content?.trim();
+    const system = systemPrompt(mode, language, project, documents);
+    const conversation = conversationId && getConversation(conversationId)
+      ? getConversation(conversationId)!
+      : createConversation({
+          projectId,
+          title: message.replace(/\s+/g, " ").slice(0, 72),
+        });
+    addConversationMessage({ conversationId: conversation.id, role: "user", content: message });
+    const candidates: Array<Exclude<ChatProvider, "auto">> =
+      provider === "auto"
+        ? ["gemini", "groq", "deepseek", "openai"]
+        : [provider];
+    let reply: string | undefined;
+    let usedProvider: Exclude<ChatProvider, "auto"> | undefined;
+    for (const candidate of candidates) {
+      if (!providerIsConfigured(candidate, localEndpoint)) continue;
+      try {
+        reply = await generateWithProvider(candidate, {
+          system,
+          history,
+          message,
+          localEndpoint,
+          localModel,
+        });
+        if (reply) {
+          usedProvider = candidate;
+          break;
+        }
+      } catch (error) {
+        req.log.warn({ provider: candidate, err: error }, "SAZ AI provider unavailable");
+      }
+    }
     if (!reply) {
-      res.status(502).json({ error: "The AI returned an empty response." });
+      res.status(502).json({ error: "All configured AI providers were unavailable." });
       return;
     }
+    addConversationMessage({ conversationId: conversation.id, role: "assistant", content: reply });
 
     let nextProject = project;
     if (mode === "ideas" && !project) {
@@ -253,7 +469,7 @@ router.post("/assistant/chat", async (req, res) => {
       });
     }
 
-    res.json({ reply, project: nextProject ?? null });
+    res.json({ reply, project: nextProject ?? null, conversationId: conversation.id, provider: usedProvider });
   } catch (error) {
     req.log.error({ err: error }, "SAZ AI provider request failed");
     res.status(502).json({

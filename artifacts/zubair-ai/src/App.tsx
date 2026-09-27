@@ -9,22 +9,32 @@ import NotFound from '@/pages/not-found';
 import {
   ArrowUp,
   Bot,
+  Bug,
   Check,
   ChevronDown,
   Code2,
   Copy,
+  Database,
+  Download,
   FileCode2,
+  FileDown,
   FolderKanban,
+  Github,
   Lightbulb,
   Mic,
   MicOff,
   Moon,
   PanelLeft,
+  Play,
   Plus,
   RefreshCw,
+  Search,
+  Settings2,
+  Share2,
   Sparkles,
   Sun,
   Trash2,
+  Upload,
   UserRound,
   Volume2,
   Wrench,
@@ -42,6 +52,8 @@ const queryClient = new QueryClient();
 
 type Mode = 'coding' | 'ideas';
 type Language = 'english' | 'urdu' | 'roman';
+type Provider = 'auto' | 'gemini' | 'groq' | 'deepseek' | 'openai' | 'local';
+type WorkspaceTool = 'knowledge' | 'history' | 'sandbox' | 'debugger' | 'database' | 'social' | 'settings';
 type Message = { id: number; role: 'assistant' | 'user'; text: string; time: string };
 type SpeechRecognitionResultLike = { 0?: { transcript: string } };
 type SpeechRecognitionEventLike = Event & { results: ArrayLike<SpeechRecognitionResultLike> };
@@ -58,6 +70,8 @@ type SpeechRecognitionLike = {
   stop: () => void;
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+type KnowledgeDocument = { id: number; projectId: number; name: string; mimeType: string; createdAt: string };
+type ConversationSummary = { id: number; projectId: number | null; title: string; createdAt: string; updatedAt: string };
 type Project = {
   id: number;
   title: string;
@@ -97,6 +111,14 @@ function Home() {
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isDark, setIsDark] = useState(() => window.localStorage.getItem('saz-ai-theme') === 'dark');
+  const [provider, setProvider] = useState<Provider>(() => (window.localStorage.getItem('saz-ai-provider') as Provider | null) ?? 'auto');
+  const [localEndpoint, setLocalEndpoint] = useState(() => window.localStorage.getItem('saz-ai-local-endpoint') ?? 'http://localhost:11434');
+  const [localModel, setLocalModel] = useState(() => window.localStorage.getItem('saz-ai-local-model') ?? 'llama3.2');
+  const [conversationId, setConversationId] = useState<number | null>(null);
+  const [activeTool, setActiveTool] = useState<WorkspaceTool | null>(null);
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [sandboxCode, setSandboxCode] = useState('<main><h1>SAZ AI Sandbox</h1><p>Edit the code and preview it safely.</p></main>');
   const [notice, setNotice] = useState('');
   const [mobilePanel, setMobilePanel] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -125,6 +147,12 @@ function Home() {
     window.localStorage.setItem('saz-ai-theme', isDark ? 'dark' : 'light');
   }, [isDark]);
 
+  useEffect(() => {
+    window.localStorage.setItem('saz-ai-provider', provider);
+    window.localStorage.setItem('saz-ai-local-endpoint', localEndpoint);
+    window.localStorage.setItem('saz-ai-local-model', localModel);
+  }, [provider, localEndpoint, localModel]);
+
   useEffect(() => () => {
     recognitionRef.current?.stop();
     if (voiceSendTimeoutRef.current !== null) {
@@ -138,6 +166,22 @@ function Home() {
       .then((data: Project[]) => setProjects(Array.isArray(data) ? data : []))
       .catch(() => setNotice('Project memory is unavailable'));
   }, []);
+
+  useEffect(() => {
+    setConversationId(null);
+    if (!activeProjectId) {
+      setKnowledgeDocs([]);
+      setConversations([]);
+      return;
+    }
+    void Promise.all([
+      fetch(`/api/assistant/projects/${activeProjectId}/knowledge`).then((response) => response.ok ? response.json() : []),
+      fetch(`/api/assistant/projects/${activeProjectId}/conversations`).then((response) => response.ok ? response.json() : []),
+    ]).then(([documents, history]) => {
+      setKnowledgeDocs(Array.isArray(documents) ? documents : []);
+      setConversations(Array.isArray(history) ? history : []);
+    }).catch(() => setNotice('Workspace context could not be loaded'));
+  }, [activeProjectId]);
 
   const upsertProject = (project: Project) => {
     setProjects((current) => {
@@ -163,13 +207,18 @@ function Home() {
           mode,
           language,
           projectId: activeProjectId,
+          provider,
+          localEndpoint: provider === 'local' ? localEndpoint : undefined,
+          localModel: provider === 'local' ? localModel : undefined,
+          conversationId,
           history: [...messages, userMessage].slice(-16).map((item) => ({ role: item.role, content: item.text })),
         }),
       });
-      const data = await response.json() as { reply?: string; project?: Project | null; error?: string };
+      const data = await response.json() as { reply?: string; project?: Project | null; conversationId?: number; provider?: string; error?: string };
       if (!response.ok || !data.reply) throw new Error(data.error ?? 'The assistant could not respond.');
       setMessages((current) => [...current, { id: messageId.current++, role: 'assistant', text: data.reply!, time: getTime() }]);
       if (data.project) upsertProject(data.project);
+      if (data.conversationId) setConversationId(data.conversationId);
     } catch (error) {
       setMessages((current) => [...current, {
         id: messageId.current++,
@@ -186,6 +235,80 @@ function Home() {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void sendMessage(draft);
+  };
+
+  const uploadKnowledge = async (file: File) => {
+    if (!activeProjectId) {
+      setNotice('Select or save a project before uploading knowledge');
+      return;
+    }
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const content = isPdf
+      ? `PDF uploaded for project context: ${file.name}. Extracted text is not available in this browser upload.`
+      : (await file.text()).slice(0, 100_000);
+    const response = await fetch(`/api/assistant/projects/${activeProjectId}/knowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, mimeType: file.type || 'text/plain', content }),
+    });
+    if (!response.ok) {
+      setNotice('Knowledge upload failed');
+      return;
+    }
+    const document = await response.json() as KnowledgeDocument;
+    setKnowledgeDocs((current) => [document, ...current]);
+    setNotice(`${file.name} added to project knowledge`);
+  };
+
+  const deleteKnowledge = async (id: number) => {
+    const response = await fetch(`/api/assistant/knowledge/${id}`, { method: 'DELETE' });
+    if (response.ok) {
+      setKnowledgeDocs((current) => current.filter((document) => document.id !== id));
+      setNotice('Knowledge document removed');
+    }
+  };
+
+  const loadHistory = async (search: string) => {
+    if (!activeProjectId) return;
+    const response = await fetch(`/api/assistant/projects/${activeProjectId}/conversations?search=${encodeURIComponent(search)}`);
+    if (response.ok) setConversations(await response.json() as ConversationSummary[]);
+  };
+
+  const exportMarkdown = () => {
+    const content = messages.map((message) => `## ${message.role === 'assistant' ? 'SAZ AI' : 'You'} · ${message.time}\n\n${message.text}`).join('\n\n');
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'saz-ai-conversation.md';
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice('Markdown export downloaded');
+  };
+
+  const exportPdf = () => {
+    window.print();
+  };
+
+  const downloadCode = () => {
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    const code = lastAssistant?.text.match(/```(?:[\w+-]+)?\s*([\s\S]*?)```/)?.[1]?.trim();
+    if (!code) {
+      setNotice('No code block found in the latest reply');
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'saz-ai-generated-code.txt';
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice('Code file downloaded');
+  };
+
+  const runToolPrompt = (prompt: string) => {
+    setActiveTool(null);
+    setMode('coding');
+    void sendMessage(prompt);
   };
 
   const toggleVoiceInput = () => {
@@ -343,6 +466,27 @@ function Home() {
             )}
           </div>
 
+           <div className="mt-7">
+             <div className="mb-3 flex items-center justify-between px-1">
+               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/45">Build tools</span>
+               <Settings2 size={13} className="text-sidebar-foreground/35" />
+             </div>
+             <div className="grid grid-cols-2 gap-1.5">
+               {([
+                 ['knowledge', 'Knowledge', FileCode2],
+                 ['history', 'History', Search],
+                 ['sandbox', 'Sandbox', Play],
+                 ['debugger', 'Debugger', Bug],
+                 ['database', 'DB playground', Database],
+                 ['social', 'Content hub', Share2],
+               ] as const).map(([tool, label, Icon]) => (
+                 <button type="button" key={tool} onClick={() => setActiveTool(tool)} className="flex items-center gap-2 rounded-lg bg-sidebar-accent/45 px-2 py-2 text-left text-[10px] text-sidebar-foreground/65 transition hover:bg-sidebar-accent hover:text-sidebar-foreground">
+                   <Icon size={13} /> {label}
+                 </button>
+               ))}
+             </div>
+           </div>
+
           <div className="mt-auto">
             <div className="mb-4 rounded-2xl border border-sidebar-border bg-sidebar-accent/45 p-4">
               <div className="flex items-start justify-between">
@@ -444,7 +588,160 @@ function Home() {
           </div>
         </main>
       </div>
+       {activeTool && <WorkspaceToolPanel
+         tool={activeTool}
+         onClose={() => setActiveTool(null)}
+         documents={knowledgeDocs}
+         conversations={conversations}
+         onUploadKnowledge={(file) => void uploadKnowledge(file)}
+         onDeleteKnowledge={(id) => void deleteKnowledge(id)}
+         onSearchHistory={(search) => void loadHistory(search)}
+         sandboxCode={sandboxCode}
+         onSandboxCodeChange={setSandboxCode}
+         provider={provider}
+         onProviderChange={setProvider}
+         localEndpoint={localEndpoint}
+         onLocalEndpointChange={setLocalEndpoint}
+         localModel={localModel}
+         onLocalModelChange={setLocalModel}
+         onRunPrompt={runToolPrompt}
+         onExportMarkdown={exportMarkdown}
+         onExportPdf={exportPdf}
+         onDownloadCode={downloadCode}
+         onNotice={setNotice}
+       />}
       {notice && <div role="status" data-testid="status-notice" className="animate-rise-in fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-sidebar-border bg-sidebar px-4 py-2.5 font-mono text-[10px] uppercase tracking-wider text-sidebar-foreground shadow-xl"><Check size={13} className="text-primary" />{notice}</div>}
+    </div>
+  );
+}
+
+function WorkspaceToolPanel({
+  tool,
+  onClose,
+  documents,
+  conversations,
+  onUploadKnowledge,
+  onDeleteKnowledge,
+  onSearchHistory,
+  sandboxCode,
+  onSandboxCodeChange,
+  provider,
+  onProviderChange,
+  localEndpoint,
+  onLocalEndpointChange,
+  localModel,
+  onLocalModelChange,
+  onRunPrompt,
+  onExportMarkdown,
+  onExportPdf,
+  onDownloadCode,
+  onNotice,
+}: {
+  tool: WorkspaceTool;
+  onClose: () => void;
+  documents: KnowledgeDocument[];
+  conversations: ConversationSummary[];
+  onUploadKnowledge: (file: File) => void;
+  onDeleteKnowledge: (id: number) => void;
+  onSearchHistory: (search: string) => void;
+  sandboxCode: string;
+  onSandboxCodeChange: (value: string) => void;
+  provider: Provider;
+  onProviderChange: (value: Provider) => void;
+  localEndpoint: string;
+  onLocalEndpointChange: (value: string) => void;
+  localModel: string;
+  onLocalModelChange: (value: string) => void;
+  onRunPrompt: (prompt: string) => void;
+  onExportMarkdown: () => void;
+  onExportPdf: () => void;
+  onDownloadCode: () => void;
+  onNotice: (message: string) => void;
+}) {
+  const [historySearch, setHistorySearch] = useState('');
+  const [debugLog, setDebugLog] = useState('');
+  const [databaseBrief, setDatabaseBrief] = useState('');
+  const [socialBrief, setSocialBrief] = useState('');
+  const toolMeta: Record<WorkspaceTool, { label: string; description: string }> = {
+    knowledge: { label: 'Knowledge base', description: 'Upload project documents that SAZ AI can use as context.' },
+    history: { label: 'Chat history', description: 'Search saved conversations for this project.' },
+    sandbox: { label: 'Live code sandbox', description: 'Preview HTML, CSS, and JavaScript safely in the browser.' },
+    debugger: { label: 'Smart error debugger', description: 'Paste a log or stack trace and get a focused fix.' },
+    database: { label: 'DB playground', description: 'Generate schemas, REST APIs, and backend scripts from a brief.' },
+    social: { label: 'Social content hub', description: 'Create launch scripts, captions, tags, and content plans.' },
+    settings: { label: 'AI provider settings', description: 'Choose automatic fallback or a local Ollama/LM Studio endpoint.' },
+  };
+  const meta = toolMeta[tool];
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-sidebar/50 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[min(760px,calc(100dvh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-border bg-background shadow-2xl">
+        <div className="flex items-start justify-between border-b border-border px-5 py-4 sm:px-7">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent">SAZ AI workspace</div>
+            <h2 className="mt-1 font-serif text-2xl font-semibold tracking-[-0.03em]">{meta.label}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{meta.description}</p>
+          </div>
+          <button type="button" aria-label="Close workspace tool" onClick={onClose} className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><X size={17} /></button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+          {tool === 'knowledge' && (
+            <div className="space-y-5">
+              <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-primary/40 bg-primary/5 p-8 text-center transition hover:bg-primary/10">
+                <Upload size={22} className="text-primary" />
+                <span className="mt-3 text-sm font-bold">Upload text, PDF, or code files</span>
+                <span className="mt-1 text-xs text-muted-foreground">Files are stored with the selected project and injected into future prompts.</span>
+                <input type="file" multiple accept=".txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.css,.html,.sql,.pdf,text/*,application/pdf" className="sr-only" onChange={(event) => { for (const file of Array.from(event.target.files ?? [])) onUploadKnowledge(file); event.currentTarget.value = ''; }} />
+              </label>
+              <div className="space-y-2">
+                {documents.length === 0 ? <p className="rounded-xl border border-dashed border-border p-4 text-xs text-muted-foreground">No project documents yet.</p> : documents.map((document) => (
+                  <div key={document.id} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
+                    <FileCode2 size={16} className="shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{document.name}</p><p className="mt-1 text-[10px] text-muted-foreground">{document.mimeType}</p></div>
+                    <button type="button" aria-label={`Remove ${document.name}`} onClick={() => onDeleteKnowledge(document.id)} className="rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tool === 'history' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2"><Search size={15} className="text-muted-foreground" /><input autoFocus value={historySearch} onChange={(event) => { setHistorySearch(event.target.value); onSearchHistory(event.target.value); }} placeholder="Search conversation titles and messages..." className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></div>
+              {conversations.length === 0 ? <p className="rounded-xl border border-dashed border-border p-5 text-xs text-muted-foreground">No saved conversations match your search.</p> : <div className="space-y-2">{conversations.map((conversation) => <button type="button" key={conversation.id} onClick={() => onNotice(`Conversation ${conversation.id} is saved in project history`)} className="w-full rounded-xl border border-border bg-card p-4 text-left hover:border-primary/50"><p className="truncate text-xs font-bold">{conversation.title}</p><p className="mt-1 text-[10px] text-muted-foreground">{new Date(conversation.updatedAt).toLocaleString()}</p></button>)}</div>}
+            </div>
+          )}
+
+          {tool === 'sandbox' && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div><label className="mb-2 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">HTML / CSS / JS</label><textarea value={sandboxCode} onChange={(event) => onSandboxCodeChange(event.target.value)} className="h-80 w-full resize-none rounded-2xl border border-border bg-card p-4 font-mono text-xs leading-5 outline-none focus:border-primary" spellCheck={false} /></div>
+              <div><label className="mb-2 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Preview</label><iframe title="SAZ AI live code sandbox" sandbox="allow-scripts" srcDoc={sandboxCode} className="h-80 w-full rounded-2xl border border-border bg-white" /></div>
+            </div>
+          )}
+
+          {tool === 'debugger' && (
+            <div className="space-y-4"><textarea autoFocus value={debugLog} onChange={(event) => setDebugLog(event.target.value)} placeholder="Paste the error, stack trace, or failing code here..." className="h-64 w-full resize-none rounded-2xl border border-border bg-card p-4 font-mono text-xs leading-5 outline-none focus:border-primary" /><button type="button" disabled={!debugLog.trim()} onClick={() => onRunPrompt(`Act as a senior debugger. Analyze this error and return the root cause, a minimal fix, and a verification checklist:\n\n${debugLog}`)} className="rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40">Analyze and fix</button></div>
+          )}
+
+          {tool === 'database' && (
+            <div className="space-y-4"><textarea autoFocus value={databaseBrief} onChange={(event) => setDatabaseBrief(event.target.value)} placeholder="Describe the data model or API you need..." className="h-40 w-full resize-none rounded-2xl border border-border bg-card p-4 text-sm outline-none focus:border-primary" /><div className="flex flex-wrap gap-2"><button type="button" disabled={!databaseBrief.trim()} onClick={() => onRunPrompt(`Generate a production-ready database schema and REST API for this requirement. Include SQL, tables, indexes, validation, and example endpoints:\n\n${databaseBrief}`)} className="rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40">Generate DB + API</button><button type="button" onClick={() => onRunPrompt('Generate a secure Node.js REST API starter with routes, validation, error handling, and environment configuration.')} className="rounded-xl border border-border px-4 py-2.5 text-xs font-bold hover:bg-muted">Node API starter</button></div></div>
+          )}
+
+          {tool === 'social' && (
+            <div className="space-y-4"><textarea autoFocus value={socialBrief} onChange={(event) => setSocialBrief(event.target.value)} placeholder="What are you launching, for whom, and on which platform?" className="h-40 w-full resize-none rounded-2xl border border-border bg-card p-4 text-sm outline-none focus:border-primary" /><button type="button" disabled={!socialBrief.trim()} onClick={() => onRunPrompt(`Create a social content launch pack for YouTube, TikTok, and Facebook. Include a short video script, hooks, captions, hashtags, thumbnail ideas, and a 7-day launch plan:\n\n${socialBrief}`)} className="rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40">Generate content pack</button></div>
+          )}
+
+          {tool === 'settings' && (
+            <div className="space-y-5">
+              <label className="block"><span className="mb-2 block text-xs font-bold">AI provider</span><select value={provider} onChange={(event) => onProviderChange(event.target.value as Provider)} className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm outline-none"><option value="auto">Automatic fallback · Gemini → Groq → DeepSeek → OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="local">Local Ollama / LM Studio</option></select></label>
+              <div className="grid gap-4 sm:grid-cols-2"><label className="block"><span className="mb-2 block text-xs font-bold">Local endpoint</span><input value={localEndpoint} onChange={(event) => onLocalEndpointChange(event.target.value)} placeholder="http://localhost:11434" className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm outline-none" /></label><label className="block"><span className="mb-2 block text-xs font-bold">Local model</span><input value={localModel} onChange={(event) => onLocalModelChange(event.target.value)} placeholder="llama3.2" className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm outline-none" /></label></div>
+              <p className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-muted-foreground">Provider credentials remain server-side. Local mode only sends the endpoint and model name you choose to the API server.</p>
+              <div className="flex flex-wrap gap-2"><button type="button" onClick={onExportMarkdown} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><FileDown size={14} /> Export Markdown</button><button type="button" onClick={onExportPdf} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><Download size={14} /> Export PDF</button><button type="button" onClick={onDownloadCode} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><Code2 size={14} /> Download code</button><button type="button" onClick={() => onNotice('GitHub integration needs to be connected before pushing code')} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><Github size={14} /> Push to GitHub</button></div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
