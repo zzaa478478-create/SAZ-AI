@@ -1,1 +1,1 @@
-{"version": 2, "buildCommand": "node ./build.mjs", "builds": [{"src": "dist/index.mjs", "use": "@vercel/node"}], "routes": [{"src": "/(.*)", "dest": "dist/index.mjs"}]}
+{"buildCommand": "node ./build.mjs", "outputDirectory": "dist", "framework": null}
