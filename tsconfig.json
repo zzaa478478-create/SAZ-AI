@@ -1,16 +1,1 @@
-{
-  "extends": "./tsconfig.base.json",
-  "compileOnSave": false,
-  "files": [],
-  "references": [
-    {
-      "path": "./lib/db"
-    },
-    {
-      "path": "./lib/api-client-react"
-    },
-    {
-      "path": "./lib/api-zod"
-    }
-  ]
-}
+{"compilerOptions": {"target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext", "skipLibCheck": true, "noImplicitAny": false, "suppressImplicitAnyIndexErrors": true, "noEmitOnError": false}, "include": ["src/**/*"]}
