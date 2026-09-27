@@ -17,11 +17,13 @@ import {
   FolderKanban,
   Lightbulb,
   Mic,
+  MicOff,
   Moon,
   PanelLeft,
   Plus,
   RefreshCw,
   Sparkles,
+  Sun,
   Trash2,
   UserRound,
   Volume2,
@@ -41,6 +43,21 @@ const queryClient = new QueryClient();
 type Mode = 'coding' | 'ideas';
 type Language = 'english' | 'urdu' | 'roman';
 type Message = { id: number; role: 'assistant' | 'user'; text: string; time: string };
+type SpeechRecognitionResultLike = { 0?: { transcript: string } };
+type SpeechRecognitionEventLike = Event & { results: ArrayLike<SpeechRecognitionResultLike> };
+type SpeechRecognitionErrorEventLike = Event & { error: string; message?: string };
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type Project = {
   id: number;
   title: string;
@@ -65,7 +82,7 @@ const initialMessage: Message = {
   id: 1,
   role: 'assistant',
   time: 'just now',
-  text: "Assalam-o-alaikum, Zubair. I’m ready to turn a rough thought into a working build. Ask me to code, debug, explain, or shape your next app idea.",
+  text: "Assalam-o-alaikum, Zubair. I’m SAZ AI, ready to turn a rough thought into a working build. Ask me to code, debug, explain, or shape your next app idea.",
 };
 
 function getTime() {
@@ -78,11 +95,15 @@ function Home() {
   const [messages, setMessages] = useState<Message[]>([initialMessage]);
   const [draft, setDraft] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isDark, setIsDark] = useState(() => window.localStorage.getItem('saz-ai-theme') === 'dark');
   const [notice, setNotice] = useState('');
   const [mobilePanel, setMobilePanel] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const voiceSendTimeoutRef = useRef<number | null>(null);
   const messageId = useRef(2);
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode) ?? modes[0], [mode]);
@@ -98,6 +119,18 @@ function Home() {
     const timeout = window.setTimeout(() => setNotice(''), 2600);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark);
+    window.localStorage.setItem('saz-ai-theme', isDark ? 'dark' : 'light');
+  }, [isDark]);
+
+  useEffect(() => () => {
+    recognitionRef.current?.stop();
+    if (voiceSendTimeoutRef.current !== null) {
+      window.clearTimeout(voiceSendTimeoutRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     void fetch('/api/assistant/projects')
@@ -155,8 +188,76 @@ function Home() {
     void sendMessage(draft);
   };
 
+  const toggleVoiceInput = () => {
+    if (isTyping) return;
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const speechWindow = window as Window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const SpeechRecognition =
+      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setNotice('Voice input is not supported in this browser');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = language === 'english' ? 'en-US' : 'ur-PK';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onstart = () => {
+      recognitionRef.current = recognition;
+      setIsListening(true);
+      setNotice(language === 'english' ? 'Listening in English' : 'اردو میں سن رہا ہوں');
+    };
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? '')
+        .join(' ')
+        .trim();
+      if (!transcript) {
+        setNotice('No speech detected');
+        return;
+      }
+      setDraft(transcript);
+      voiceSendTimeoutRef.current = window.setTimeout(() => {
+        voiceSendTimeoutRef.current = null;
+        void sendMessage(transcript);
+      }, 250);
+    };
+    recognition.onerror = (event) => {
+      recognitionRef.current = null;
+      setIsListening(false);
+      const message =
+        event.error === 'not-allowed'
+          ? 'Microphone permission is required'
+          : event.error === 'no-speech'
+            ? 'No speech detected'
+            : 'Voice input failed. Please try again';
+      setNotice(message);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setIsListening(false);
+      setNotice('Voice input could not start');
+    }
+  };
+
   const resetConversation = (label: string) => {
-    setMessages([{ ...initialMessage, text: language === 'english' ? initialMessage.text : language === 'urdu' ? 'السلام علیکم، زبیر۔ میں آپ کے خیال کو ایک کام کرنے والی ایپ میں بدلنے کے لیے تیار ہوں۔ کوڈ، ڈیبگ، وضاحت یا اگلے ایپ آئیڈیا کے بارے میں پوچھیں۔' : 'Assalam-o-alaikum, Zubair. Main aap ke khayal ko working app mein badalne ke liye tayyar hoon. Code, debug, wazahat ya aglay app idea ke baare mein poochein.' }]);
+    setMessages([{ ...initialMessage, text: language === 'english' ? initialMessage.text : language === 'urdu' ? 'السلام علیکم، زبیر۔ میں SAZ AI ہوں اور آپ کے خیال کو ایک کام کرنے والی ایپ میں بدلنے کے لیے تیار ہوں۔ کوڈ، ڈیبگ، وضاحت یا اگلے ایپ آئیڈیا کے بارے میں پوچھیں۔' : 'Assalam-o-alaikum, Zubair. Main SAZ AI hoon aur aap ke khayal ko working app mein badalne ke liye tayyar hoon. Code, debug, wazahat ya aglay app idea ke baare mein poochein.' }]);
     setNotice(label);
   };
 
@@ -200,7 +301,7 @@ function Home() {
                 <Sparkles size={19} strokeWidth={2.5} />
               </div>
               <div>
-                <div className="font-serif text-[21px] font-semibold leading-none tracking-[-0.03em]">Zubair AI</div>
+                <div className="font-serif text-[21px] font-semibold leading-none tracking-[-0.03em]">SAZ AI</div>
                 <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-sidebar-foreground/50">personal workspace</div>
               </div>
             </div>
@@ -260,7 +361,7 @@ function Home() {
             <div className="flex items-center gap-3 border-t border-sidebar-border pt-4">
               <div className="grid size-8 place-items-center rounded-full bg-accent text-accent-foreground"><span className="text-xs font-bold">Z</span></div>
               <div className="min-w-0"><div className="truncate text-sm font-semibold">Zubair</div><div className="font-mono text-[9px] uppercase tracking-wider text-sidebar-foreground/40">builder mode</div></div>
-              <button type="button" data-testid="button-theme" aria-label="Theme settings" onClick={() => setNotice('Light, focused workspace')} className="ml-auto rounded-lg p-2 text-sidebar-foreground/45 hover:bg-sidebar-accent hover:text-sidebar-foreground"><Moon size={16} /></button>
+              <button type="button" data-testid="button-theme" aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => setIsDark((current) => !current)} className="ml-auto rounded-lg p-2 text-sidebar-foreground/45 hover:bg-sidebar-accent hover:text-sidebar-foreground">{isDark ? <Sun size={16} /> : <Moon size={16} />}</button>
             </div>
           </div>
         </aside>
@@ -272,7 +373,7 @@ function Home() {
             <div className="flex items-center gap-3">
               <button type="button" aria-label="Open navigation" data-testid="button-open-sidebar" onClick={() => setMobilePanel(true)} className="rounded-xl border border-border bg-card p-2.5 text-muted-foreground hover:bg-muted lg:hidden"><PanelLeft size={18} /></button>
               <div className="hidden items-center gap-2 sm:flex"><span className="size-2 rounded-full bg-primary animate-pulse-soft" /><span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Workspace /</span><span className="font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/60">{activeMode.label}</span></div>
-              <div className="sm:hidden"><div className="font-serif text-lg font-semibold">Zubair AI</div><div className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">ready to build</div></div>
+              <div className="sm:hidden"><div className="font-serif text-lg font-semibold">SAZ AI</div><div className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">ready to build</div></div>
             </div>
             <div className="flex items-center gap-2">
               <div className="hidden rounded-xl border border-border bg-card p-1 sm:flex">
@@ -294,7 +395,7 @@ function Home() {
                     <div className="hidden max-w-[175px] text-right font-mono text-[10px] uppercase leading-5 tracking-[0.13em] text-muted-foreground sm:block">A focused place for your next build.</div>
                   </div>
                   <div className="space-y-6">
-                    {messages.map((message) => <MessageBubble key={message.id} message={message} onCopy={() => setNotice('Message copied')} />)}
+                    {messages.map((message) => <MessageBubble key={message.id} message={message} language={language} onCopy={() => setNotice('Message copied')} />)}
                     {isTyping && <div className="animate-rise-in flex gap-3"><div className="grid size-8 shrink-0 place-items-center rounded-xl bg-sidebar text-primary"><Bot size={16} /></div><div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3"><div className="flex gap-1.5 py-1"><span className="size-1.5 rounded-full bg-accent animate-blink" /><span className="size-1.5 rounded-full bg-accent animate-blink [animation-delay:150ms]" /><span className="size-1.5 rounded-full bg-accent animate-blink [animation-delay:300ms]" /></div></div></div>}
                   </div>
                 </div>
@@ -306,9 +407,9 @@ function Home() {
                     {quickPrompts[mode].map((prompt) => <button type="button" key={prompt} data-testid={`button-prompt-${prompt.replaceAll(' ', '-').toLowerCase()}`} onClick={() => sendMessage(prompt)} className="shrink-0 rounded-full border border-border bg-card px-3.5 py-2 text-[11px] font-semibold text-muted-foreground transition hover:border-accent/60 hover:bg-accent/10 hover:text-foreground">{prompt}</button>)}
                   </div>
                   <form onSubmit={handleSubmit} className="relative rounded-2xl border border-border bg-card p-2 shadow-[0_14px_40px_hsl(var(--foreground)/.06)] transition focus-within:border-primary/70 focus-within:shadow-[0_14px_40px_hsl(var(--primary)/.12)]">
-                    <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(draft); } }} rows={2} data-testid="input-message" placeholder={language === 'urdu' ? 'اپنی سوچ یہاں لکھیں...' : language === 'roman' ? 'Apni soch yahan likhein...' : 'Tell me what you want to build...'} className="w-full resize-none bg-transparent px-3 pb-11 pt-2.5 text-sm leading-6 outline-none placeholder:text-muted-foreground/65" />
+                    <textarea dir="auto" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(draft); } }} rows={2} data-testid="input-message" placeholder={language === 'urdu' ? 'اپنی سوچ یہاں لکھیں...' : language === 'roman' ? 'Apni soch yahan likhein...' : 'Tell me what you want to build...'} className="w-full resize-none bg-transparent px-3 pb-11 pt-2.5 text-sm leading-6 outline-none placeholder:text-muted-foreground/65" />
                     <div className="absolute inset-x-2 bottom-2 flex items-center justify-between">
-                      <div className="flex items-center gap-1"><button type="button" data-testid="button-voice" onClick={() => setNotice('Voice input is coming next')} className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"><Mic size={16} /></button><span className="hidden font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 sm:inline">Shift + Enter for a new line</span></div>
+                      <div className="flex items-center gap-1"><button type="button" data-testid="button-voice" aria-label={isListening ? 'Stop voice input' : 'Start voice input'} disabled={isTyping} onClick={toggleVoiceInput} className={`rounded-lg p-2 transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45 ${isListening ? 'animate-pulse bg-destructive/10 text-destructive' : 'text-muted-foreground'}`}>{isListening ? <MicOff size={16} /> : <Mic size={16} />}</button><span className="hidden font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60 sm:inline">{isListening ? 'Listening...' : 'Shift + Enter for a new line'}</span></div>
                       <button type="submit" disabled={!draft.trim() || isTyping} data-testid="button-send" className="group flex items-center gap-2 rounded-xl bg-primary px-3.5 py-2 text-xs font-extrabold text-primary-foreground transition hover:-translate-y-0.5 hover:shadow-[0_6px_15px_hsl(var(--primary)/.27)] disabled:cursor-not-allowed disabled:opacity-45"><span>Send</span><ArrowUp size={15} className="transition-transform group-hover:-translate-y-0.5" /></button>
                     </div>
                   </form>
@@ -348,8 +449,9 @@ function Home() {
   );
 }
 
-function MessageBubble({ message, onCopy }: { message: Message; onCopy: () => void }) {
+function MessageBubble({ message, language, onCopy }: { message: Message; language: Language; onCopy: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const isAssistant = message.role === 'assistant';
   const copyMessage = async () => {
     try { await navigator.clipboard.writeText(message.text); } catch { /* local demo */ }
@@ -357,11 +459,24 @@ function MessageBubble({ message, onCopy }: { message: Message; onCopy: () => vo
     onCopy();
     window.setTimeout(() => setCopied(false), 1200);
   };
+  const speakMessage = () => {
+    if (!('speechSynthesis' in window)) {
+      onCopy();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(message.text);
+    utterance.lang = language === 'english' ? 'en-US' : 'ur-PK';
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  };
   return (
     <div className={`animate-rise-in flex gap-3 ${isAssistant ? '' : 'flex-row-reverse'}`}>
       <div className={`grid size-8 shrink-0 place-items-center rounded-xl ${isAssistant ? 'bg-sidebar text-primary' : 'bg-accent text-accent-foreground'}`}>{isAssistant ? <Bot size={16} /> : <span className="text-xs font-extrabold">Z</span>}</div>
       <div className={`group max-w-[min(88%,620px)] ${isAssistant ? '' : 'items-end'}`}>
-        <div className={`flex items-center gap-2 px-1 pb-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground ${isAssistant ? '' : 'justify-end'}`}><span>{isAssistant ? 'Zubair AI' : 'You'}</span><span className="text-muted-foreground/50">{message.time}</span></div>
+                        <div className={`flex items-center gap-2 px-1 pb-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground ${isAssistant ? '' : 'justify-end'}`}><span>{isAssistant ? 'SAZ AI' : 'You'}</span><span className="text-muted-foreground/50">{message.time}</span></div>
         <div
           data-testid={`message-${message.role}-${message.id}`}
           dir="auto"
@@ -369,7 +484,10 @@ function MessageBubble({ message, onCopy }: { message: Message; onCopy: () => vo
         >
           <MarkdownMessage content={message.text} />
         </div>
-        {isAssistant && <button type="button" aria-label="Copy assistant message" data-testid={`button-copy-message-${message.id}`} onClick={copyMessage} className="mt-1.5 flex items-center gap-1 px-1 text-[10px] text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground">{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}</button>}
+        {isAssistant && <div className="mt-1.5 flex items-center gap-3 px-1 text-[10px] text-muted-foreground opacity-0 transition group-hover:opacity-100">
+          <button type="button" aria-label="Copy assistant message" data-testid={`button-copy-message-${message.id}`} onClick={copyMessage} className="flex items-center gap-1 hover:text-foreground">{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}</button>
+          <button type="button" aria-label="Read assistant message aloud" data-testid={`button-speak-message-${message.id}`} onClick={speakMessage} className="flex items-center gap-1 hover:text-foreground"><Volume2 size={12} />{speaking ? 'Speaking' : 'Read aloud'}</button>
+        </div>}
       </div>
     </div>
   );

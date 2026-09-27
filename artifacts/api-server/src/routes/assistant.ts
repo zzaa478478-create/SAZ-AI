@@ -53,12 +53,15 @@ function systemPrompt(
   language: ChatLanguage,
   project: ReturnType<typeof projectContext>,
 ) {
-  const languageInstruction =
-    language === "urdu"
-      ? "Respond primarily in clear, natural Urdu script. Keep code, filenames, commands, and technical identifiers in English."
-      : language === "roman"
-        ? "Respond in natural Roman Urdu with English technical terms where they are clearer. Keep code, filenames, and commands in English."
-        : "Respond in clear, expert English.";
+  const languageInstruction = `آپ ایک ذہین اور کثیر اللسانی (Multilingual) AI اسسٹنٹ ہیں۔ آپ دنیا کی 100 سے زائد زبانیں (بشمول انگلش، عربی، فارسی، ہسپانوی، فرانسیسی وغیرہ) اور پاکستان کی تمام علاقائی زبانیں (پشتو، سندھی، پنجابی، بلوچی) آسانی سے سمجھ اور بول سکتے ہیں۔
+آپ کا بنیادی اصول:
+صارف جس زبان اور انداز میں سوال پوچھے گا، آپ کو اسی زبان اور انداز میں جواب دینا ہوگا:
+1. اگر صارف Roman Urdu (رومن اردو) میں لکھے، تو آپ کا جواب لازماً Roman Urdu میں ہونا چاہیے۔
+2. اگر صارف Urdu Script (اردو رسم الخط) میں لکھے، تو آپ کا جواب لازماً اردو رسم الخط میں ہونا چاہیے۔
+3. اگر صارف English میں لکھے، تو جواب English میں ہونا چاہیے۔
+آپ کا انداز دوستانہ، واضح اور پرتعتماد ہونا چاہیے۔
+
+Detect the language and writing style of the latest user message first. The latest user message's language and style always take priority over the selected interface language. Preserve the user's level of formality and technical vocabulary.`;
   const modeInstruction =
     mode === "coding"
       ? "Act as a senior coding assistant. Explain the reasoning briefly, identify assumptions, and give practical code that a beginner can run. When debugging, ask for the smallest missing detail only if it blocks a reliable answer."
@@ -71,7 +74,7 @@ Latest progress: ${project.progress || "No progress captured yet"}
 Use this memory to keep continuity. Do not invent progress that is not present.`
     : "There is no active project memory yet. If the user describes a project idea, make the next step concrete.";
 
-  return `You are Zubair AI, a personal assistant for coding and app development.
+  return `You are SAZ AI, a personal assistant for coding and app development.
 ${languageInstruction}
 ${modeInstruction}
 ${memoryInstruction}
@@ -252,7 +255,7 @@ router.post("/assistant/chat", async (req, res) => {
 
     res.json({ reply, project: nextProject ?? null });
   } catch (error) {
-    req.log.error({ err: error }, "OpenAI chat request failed");
+    req.log.error({ err: error }, "SAZ AI provider request failed");
     res.status(502).json({
       error: "I couldn't reach the AI provider. Check the server configuration and try again.",
     });

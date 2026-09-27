@@ -1,6 +1,6 @@
-# Zubair AI
+# SAZ AI
 
-Zubair AI is a mobile-first personal coding and app-development assistant with Urdu, Roman Urdu, English, and persistent project memory.
+SAZ AI is a mobile-first multilingual personal coding and app-development assistant with persistent project memory.
 
 ## Run & Operate
 
@@ -39,7 +39,7 @@ Zubair AI is a mobile-first personal coding and app-development assistant with U
 
 ## Product
 
-- Real AI coding and app-idea responses in English, Urdu, and Roman Urdu.
+- Real AI coding and app-idea responses in the user's language, including English, Urdu, Roman Urdu, and regional languages.
 - Coding Assistant and App Idea Generator modes.
 - Persistent project list with idea, status, and latest progress.
 
