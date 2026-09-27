@@ -1,1 +1,1 @@
-{"version": 2, "builds": [{"src": "build.mjs", "use": "@vercel/node"}, {"src": "public/**/*", "use": "@vercel/static"}], "routes": [{"src": "/api/(.*)", "dest": "build.mjs"}, {"src": "/(.*)", "dest": "public/$1"}]}
+{"version": 2, "builds": [{"src": "api/index.js", "use": "@vercel/node"}], "routes": [{"src": "/(.*)", "dest": "api/index.js"}]}
